@@ -1,10 +1,12 @@
 package owl
 
 import (
+	"context"
 	"log"
 	"path"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/api/watch"
@@ -15,12 +17,15 @@ type consulConfigure struct {
 	cfg        interface{}
 	consulAddr string
 	baseKey    string
+	ctx        context.Context
+	client     *api.Client
 }
 
-func New(cfg interface{}, consulAddr string) *consulConfigure {
+func New(ctx context.Context, cfg interface{}, consulAddr string) *consulConfigure {
 	cc := &consulConfigure{
 		cfg:        cfg,
 		consulAddr: consulAddr,
+		ctx:        ctx,
 	}
 	cc.initKeys()
 	consulCfg := api.DefaultConfig()
@@ -29,8 +34,12 @@ func New(cfg interface{}, consulAddr string) *consulConfigure {
 	if err != nil {
 		panic(err)
 	}
+	cc.client = client
 	kv := client.KV()
 	ks, _, err := kv.List(cc.baseKey, nil)
+	if err != nil {
+		panic(err.Error())
+	}
 	if len(ks) > 0 {
 		for _, k := range ks {
 			if cValue, ok := cc.keys[k.Key]; ok {
@@ -41,9 +50,6 @@ func New(cfg interface{}, consulAddr string) *consulConfigure {
 			}
 			log.Printf("Key:%s,Value:%s\n", k.Key, string(k.Value))
 		}
-	}
-	if err != nil {
-		panic(err.Error())
 	}
 	return cc
 }
@@ -79,11 +85,27 @@ func (c *consulConfigure) watchKey(key string, callbackFuns ...reflect.Value) er
 		log.Printf(">>>%s:%s", string(v.Key), string(v.Value))
 	}
 
-	go func() {
-		if err := plan.Run("http://" + c.consulAddr); err != nil {
-			log.Panic(err.Error())
+LOOP:
+	for {
+		watchChan := make(chan error)
+		go func() {
+			defer close(watchChan)
+			if err := plan.RunWithClientAndLogger(c.client, nil); err != nil {
+				log.Println("--->", err.Error())
+			}
+			watchChan <- err
+		}()
+		select {
+		case <-c.ctx.Done():
+			log.Printf("%s->watcher close", key)
+			time.Sleep(2 * time.Second)
+			if !plan.IsStopped() {
+				plan.Stop()
+			}
+			break LOOP
+		case <-watchChan:
 		}
-	}()
+	}
 	return nil
 }
 
@@ -139,7 +161,7 @@ func (c *consulConfigure) initKeys() {
 				}
 			}
 			if autoWatch {
-				c.watchKey(consulKey, watchCallbackFuns...)
+				go c.watchKey(consulKey, watchCallbackFuns...)
 			}
 		}
 	}

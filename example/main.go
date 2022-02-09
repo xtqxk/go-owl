@@ -1,8 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/xtqxk/go-owl"
 )
@@ -29,6 +34,14 @@ func (d *demoCfg) APIPortUpdateHandler(key, val string) {
 
 func main() {
 	cfg := new(demoCfg)
-	owl.New(cfg, "consul-server-addr:8500")
-	select {}
+	ctx, cancel := context.WithCancel(context.Background())
+	owl.New(ctx, cfg, "consul-server-addr:8500")
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+	<-ch
+	log.Println("cancel")
+	cancel()
+	<-ctx.Done()
+	time.Sleep(1 * time.Second)
+	log.Println("bye!")
 }
