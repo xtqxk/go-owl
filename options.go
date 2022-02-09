@@ -19,14 +19,20 @@ type consulConfigure struct {
 	baseKey    string
 	ctx        context.Context
 	client     *api.Client
+	logger     *log.Logger
 }
 
-func New(ctx context.Context, cfg interface{}, consulAddr string) *consulConfigure {
+func New(ctx context.Context, cfg interface{}, consulAddr string, logger *log.Logger) *consulConfigure {
+	if logger == nil {
+		logger = log.Default()
+	}
 	cc := &consulConfigure{
 		cfg:        cfg,
 		consulAddr: consulAddr,
 		ctx:        ctx,
+		logger:     logger,
 	}
+
 	cc.initKeys()
 	consulCfg := api.DefaultConfig()
 	consulCfg.Address = consulAddr
@@ -45,10 +51,10 @@ func New(ctx context.Context, cfg interface{}, consulAddr string) *consulConfigu
 			if cValue, ok := cc.keys[k.Key]; ok {
 				_, err := SetValue(cValue, string(k.Value))
 				if err != nil {
-					log.Fatalln(err.Error())
+					logger.Fatalln(err.Error())
 				}
 			}
-			log.Printf("Key:%s,Value:%s\n", k.Key, string(k.Value))
+			logger.Printf("Key:%s,Value:%s\n", k.Key, string(k.Value))
 		}
 	}
 	return cc
@@ -74,7 +80,7 @@ func (c *consulConfigure) watchKey(key string, callbackFuns ...reflect.Value) er
 		if cValue, ok := c.keys[v.Key]; ok {
 			_, err := SetValue(cValue, string(v.Value))
 			if err != nil {
-				log.Printf("err:%s", err.Error())
+				c.logger.Printf("err:%s", err.Error())
 			} else if len(callbackFuns) > 0 {
 				for _, function := range callbackFuns {
 					args := []reflect.Value{reflect.ValueOf(key), reflect.ValueOf(string(v.Value))}
@@ -82,7 +88,7 @@ func (c *consulConfigure) watchKey(key string, callbackFuns ...reflect.Value) er
 				}
 			}
 		}
-		log.Printf(">>>%s:%s", string(v.Key), string(v.Value))
+		c.logger.Printf(">>>%s:%s", string(v.Key), string(v.Value))
 	}
 
 LOOP:
@@ -90,14 +96,16 @@ LOOP:
 		watchChan := make(chan error)
 		go func() {
 			defer close(watchChan)
-			if err := plan.RunWithClientAndLogger(c.client, nil); err != nil {
-				log.Println("--->", err.Error())
+			if err := plan.RunWithClientAndLogger(c.client, c.logger); err != nil {
+				c.logger.Println("--->", err.Error())
+				watchChan <- err
+				return
 			}
-			watchChan <- err
+			watchChan <- nil
 		}()
 		select {
 		case <-c.ctx.Done():
-			log.Printf("%s->watcher close", key)
+			c.logger.Printf("%s->watcher close", key)
 			time.Sleep(2 * time.Second)
 			if !plan.IsStopped() {
 				plan.Stop()
@@ -144,7 +152,7 @@ func (c *consulConfigure) initKeys() {
 			if len(defaultVal) > 0 {
 				_, err := SetValue(fv, defaultVal)
 				if err != nil {
-					log.Println(err.Error())
+					c.logger.Println(err.Error())
 				}
 			}
 
