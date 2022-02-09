@@ -25,7 +25,6 @@ func (d *demoCfg) APIPortUpdateHandler(key, val string) {
 	log.Printf("APIPortUpdateHandler:key:%s,val:%s", key, val)
 	jsonBytes, _ := json.Marshal(d)
 	log.Println(string(jsonBytes))
-
 }
 
 func main() {
