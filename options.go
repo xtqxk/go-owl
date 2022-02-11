@@ -32,8 +32,6 @@ func New(ctx context.Context, cfg interface{}, consulAddr string, logger *log.Lo
 		ctx:        ctx,
 		logger:     logger,
 	}
-
-	cc.initKeys()
 	consulCfg := api.DefaultConfig()
 	consulCfg.Address = consulAddr
 	client, err := api.NewClient(consulCfg)
@@ -41,6 +39,7 @@ func New(ctx context.Context, cfg interface{}, consulAddr string, logger *log.Lo
 		panic(err)
 	}
 	cc.client = client
+	cc.initKeys()
 	kv := client.KV()
 	ks, _, err := kv.List(cc.baseKey, nil)
 	if err != nil {
