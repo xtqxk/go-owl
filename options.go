@@ -13,7 +13,11 @@ import (
 )
 
 type consulConfigure struct {
-	keys       map[string]reflect.Value
+	keys               map[string]reflect.Value //full key path: attrs
+	keyChangeCallbacks map[reflect.Value]struct {
+		key       string
+		callbacks []reflect.Value
+	}
 	cfg        interface{}
 	consulAddr string
 	baseKey    string
@@ -48,7 +52,7 @@ func New(ctx context.Context, cfg interface{}, consulAddr string, logger *log.Lo
 	if len(ks) > 0 {
 		for _, k := range ks {
 			if cValue, ok := cc.keys[k.Key]; ok {
-				_, err := SetValue(cValue, string(k.Value))
+				err := cc.updateKV(cValue, string(k.Value))
 				if err != nil {
 					logger.Fatalln(err.Error())
 				}
@@ -77,15 +81,7 @@ func (c *consulConfigure) watchKey(key string, callbackFuns ...reflect.Value) er
 			return // ignore
 		}
 		if cValue, ok := c.keys[v.Key]; ok {
-			_, err := SetValue(cValue, string(v.Value))
-			if err != nil {
-				c.logger.Printf("err:%s", err.Error())
-			} else if len(callbackFuns) > 0 {
-				for _, function := range callbackFuns {
-					args := []reflect.Value{reflect.ValueOf(key), reflect.ValueOf(string(v.Value))}
-					function.Call(args)
-				}
-			}
+			c.updateKV(cValue, string(v.Value))
 		}
 		c.logger.Printf(">>>%s:%s", string(v.Key), string(v.Value))
 	}
@@ -117,11 +113,14 @@ LOOP:
 }
 
 func (c *consulConfigure) initKeys() {
-	t := reflect.TypeOf(c.cfg)
 	rv := reflect.ValueOf(c.cfg)
-	es := t.Elem()
+	es := reflect.TypeOf(c.cfg).Elem()
 	ev := rv.Elem()
 	c.keys = make(map[string]reflect.Value, es.NumField())
+	c.keyChangeCallbacks = make(map[reflect.Value]struct {
+		key       string
+		callbacks []reflect.Value
+	})
 	for i := 0; i < es.NumField(); i++ {
 		f := es.Field(i)
 		fv := ev.FieldByName(f.Name)
@@ -147,13 +146,6 @@ func (c *consulConfigure) initKeys() {
 			}
 			fullKey := c.getFullKeyPath(consulKey)
 			c.keys[fullKey] = fv
-			defaultVal := f.Tag.Get("default")
-			if len(defaultVal) > 0 {
-				_, err := SetValue(fv, defaultVal)
-				if err != nil {
-					c.logger.Println(err.Error())
-				}
-			}
 
 			watchCallbackFuns := []reflect.Value{}
 			if len(consulValStr) > 0 {
@@ -167,11 +159,40 @@ func (c *consulConfigure) initKeys() {
 					}
 				}
 			}
+			c.keyChangeCallbacks[fv] = struct {
+				key       string
+				callbacks []reflect.Value
+			}{
+				key:       consulKey,
+				callbacks: watchCallbackFuns,
+			}
+			defaultVal := f.Tag.Get("default")
+			if len(defaultVal) > 0 {
+				err := c.updateKV(fv, defaultVal)
+				if err != nil {
+					c.logger.Println(err.Error())
+				}
+			}
 			if autoWatch {
 				go c.watchKey(consulKey, watchCallbackFuns...)
 			}
 		}
 	}
+}
+
+func (c *consulConfigure) updateKV(cValue reflect.Value, val string) error {
+	_, err := SetValue(cValue, val)
+	if err != nil {
+		c.logger.Printf("err:%s", err.Error())
+		return err
+	} else if _, ok := c.keyChangeCallbacks[cValue]; ok {
+		item := c.keyChangeCallbacks[cValue]
+		for _, function := range item.callbacks {
+			args := []reflect.Value{reflect.ValueOf(item.key), reflect.ValueOf(val)}
+			function.Call(args)
+		}
+	}
+	return nil
 }
 
 func (c *consulConfigure) getFullKeyPath(key string) string {
