@@ -37,7 +37,10 @@ func (d *demoCfg) APIPortUpdateHandler(key, val string) {
 func main() {
 	cfg := new(demoCfg)
 	ctx, cancel := context.WithCancel(context.Background())
-	owl.New(ctx, cfg, "consul-server-addr:8500", log.Default())
+	_, err := owl.New(ctx, cfg, "consul-server-addr:8500", log.Default())
+	if err != nil {
+		log.Fatalf("error:%s", err.Error())
+	}
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 	<-ch

@@ -3,7 +3,7 @@ package owl
 import (
 	"context"
 	"log"
-	"path"
+	"net/url"
 	"reflect"
 	"strings"
 	"time"
@@ -26,7 +26,7 @@ type consulConfigure struct {
 	logger     *log.Logger
 }
 
-func New(ctx context.Context, cfg interface{}, consulAddr string, logger *log.Logger) *consulConfigure {
+func New(ctx context.Context, cfg interface{}, consulAddr string, logger *log.Logger) (*consulConfigure, error) {
 	if logger == nil {
 		logger = log.Default()
 	}
@@ -40,14 +40,16 @@ func New(ctx context.Context, cfg interface{}, consulAddr string, logger *log.Lo
 	consulCfg.Address = consulAddr
 	client, err := api.NewClient(consulCfg)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	cc.client = client
-	cc.initKeys()
+	if err := cc.initKeys(); err != nil {
+		return nil, err
+	}
 	kv := client.KV()
 	ks, _, err := kv.List(cc.baseKey, nil)
 	if err != nil {
-		panic(err.Error())
+		return nil, err
 	}
 	if len(ks) > 0 {
 		for _, k := range ks {
@@ -60,13 +62,17 @@ func New(ctx context.Context, cfg interface{}, consulAddr string, logger *log.Lo
 			logger.Printf("Key:%s,Value:%s\n", k.Key, string(k.Value))
 		}
 	}
-	return cc
+	return cc, nil
 }
 
 func (c *consulConfigure) watchKey(key string, callbackFuns ...reflect.Value) error {
+	pKey, err := c.getFullKeyPath(key)
+	if err != nil {
+		return err
+	}
 	params := map[string]interface{}{
 		"type": "key",
-		"key":  c.getFullKeyPath(key),
+		"key":  pKey,
 	}
 	plan, err := watch.Parse(params)
 	if err != nil {
@@ -112,7 +118,7 @@ LOOP:
 	return nil
 }
 
-func (c *consulConfigure) initKeys() {
+func (c *consulConfigure) initKeys() error {
 	rv := reflect.ValueOf(c.cfg)
 	es := reflect.TypeOf(c.cfg).Elem()
 	ev := rv.Elem()
@@ -144,7 +150,10 @@ func (c *consulConfigure) initKeys() {
 			if len(tagParts) > 1 {
 				consulValStr = tagParts[1]
 			}
-			fullKey := c.getFullKeyPath(consulKey)
+			fullKey, err := c.getFullKeyPath(consulKey)
+			if err != nil {
+				return err
+			}
 			c.keys[fullKey] = fv
 
 			watchCallbackFuns := []reflect.Value{}
@@ -178,6 +187,7 @@ func (c *consulConfigure) initKeys() {
 			}
 		}
 	}
+	return nil
 }
 
 func (c *consulConfigure) updateKV(cValue reflect.Value, val string) error {
@@ -195,9 +205,9 @@ func (c *consulConfigure) updateKV(cValue reflect.Value, val string) error {
 	return nil
 }
 
-func (c *consulConfigure) getFullKeyPath(key string) string {
+func (c *consulConfigure) getFullKeyPath(key string) (string, error) {
 	if c.baseKey == "" {
-		return key
+		return key, nil
 	}
-	return path.Join(c.baseKey, key)
+	return url.JoinPath(c.baseKey, key)
 }
